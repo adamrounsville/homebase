@@ -41,6 +41,7 @@
 /backend/.venv
 /backend/.venv/pyvenv.cfg
 /backend/.env
+/backend/__pycache__
 
+# Misc
 .DS_Store
-
