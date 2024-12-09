@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import googlemaps
 from contextlib import asynccontextmanager
 from starlette.middleware.cors import CORSMiddleware
+import requests
 
 from models.place import Place
 from models.latlon import LatLon
@@ -277,3 +278,82 @@ def add_daily_plan(user_id: Annotated[str, Body()], daily_plan_id: Annotated[str
     db.create_daily_plan(user_id, daily_plan_id)
 
     return { "message" : "success" }
+
+@app.post("/optimize-routes")
+async def optimize_routes(user_id: Annotated[str, Body()]):
+    """
+    Takes in a user ID and optimizes routes for all trips in their vacation plans
+    using Google Maps Compute Routes API.
+    """
+    try:
+        # Get all daily plans for the user
+        daily_plans = db.get_daily_plan_list(user_id)
+        
+        optimized_routes = []
+        
+        for plan_id in daily_plans:
+            places = db.get_daily_plan(user_id, plan_id)
+            
+            if not places or len(places) < 2:
+                continue
+                
+            # Prepare request for Google Maps API
+            origin = {
+                "location": {
+                    "latLng": {
+                        "latitude": places[0].latitude,
+                        "longitude": places[0].longitude
+                    }
+                }
+            }
+            
+            destination = {
+                "location": {
+                    "latLng": {
+                        "latitude": places[-1].latitude,
+                        "longitude": places[-1].longitude
+                    }
+                }
+            }
+            
+            intermediates = []
+            for place in places[1:-1]:
+                intermediates.append({
+                    "location": {
+                        "latLng": {
+                            "latitude": place.latitude,
+                            "longitude": place.longitude
+                        }
+                    }
+                })
+            
+            request_body = {
+                "origin": origin,
+                "destination": destination,
+                "intermediates": intermediates,
+                "travelMode": "DRIVE",
+                "routingPreference": "TRAFFIC_AWARE",
+                "computeAlternativeRoutes": False,
+                "optimizeWaypointOrder": True
+            }
+            
+            # Make request to Google Maps API
+            url = "https://routes.googleapis.com/directions/v2:computeRoutes"
+            headers = {
+                "X-Goog-Api-Key": os.getenv("GOOGLE_MAPS_API_KEY"),
+                "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.optimizedIntermediateWaypointIndex"
+            }
+            
+            response = requests.post(url, json=request_body, headers=headers)
+            
+            if response.status_code == 200:
+                route_data = response.json()
+                optimized_routes.append({
+                    "plan_id": plan_id,
+                    "route_data": route_data
+                })
+            
+        return {"optimized_routes": optimized_routes}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
